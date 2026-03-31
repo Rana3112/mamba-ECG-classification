@@ -17,6 +17,18 @@ Real-time cardiac arrhythmia detection on edge devices demands architectures tha
 
 ---
 
+## Architecture Overview
+
+### ECG Classification Pipeline
+
+![ECG Classification Pipeline](paper/figures/architecture/last.png)
+
+### Mamba vs SSM Architecture
+
+![Mamba vs SSM Architecture](paper/figures/architecture/mamba_vs_ssm_diagram.png)
+
+---
+
 ## Dataset: PhysioNet/CinC 2017
 
 | Property | Value |
@@ -29,12 +41,7 @@ Real-time cardiac arrhythmia detection on edge devices demands architectures tha
 
 ### Class Distribution
 
-```
-Normal (N)          ████████████████████████████████████████  5,076 (59.5%)
-Other (O)           ████████████████████                      2,311 (27.1%)
-Atrial Fibrib (A)   ███████                                    758 ( 8.9%)
-Noise (~)           ███                                        383 ( 4.5%)
-```
+![Class Distribution](results/training_plots/fig6_class_distribution.png)
 
 The severe class imbalance — particularly the 4.5% representation of Noise signals — poses a significant challenge for all architectures.
 
@@ -118,35 +125,34 @@ All models trained with **identical hyperparameters** for fair comparison:
 | Transformer | 24.24% | 58.25% | 1.206 | 0.25 hrs |
 | LSTM | 18.80% | 60.19% | 1.270 | 0.30 hrs |
 
-### F1 Score Comparison (Validation)
+### F1 Score Progression
 
-```
-Macro F1 (%)
-50 ┤
-   │
-45 ┤  ████ Mamba (42.91%)
-   │
-40 ┤  ████
-   │
-35 ┤  ████
-   │
-30 ┤  ████        ████ SSM (27.61%)
-   │
-25 ┤  ████        ████        ████ Transformer (24.24%)
-   │
-20 ┤  ████        ████        ████        ████ LSTM (18.80%)
-   │
-15 ┤  ████        ████        ████        ████
-   │
-10 ┤  ████        ████        ████        ████
-   │
- 5 ┤  ████        ████        ████        ████
-   │
- 0 ┼──┴───────────┴───────────┴───────────┴────
-       Mamba       SSM      Transformer     LSTM
-```
+![F1 Score Curves](results/training_plots/fig2_f1_curves.png)
+
+**Mamba's F1 rises sharply from 18.8% to 42.9% by epoch 5**, then drops to 34.9% at epoch 6 — indicating overfitting onset. Early stopping would improve generalization.
+
+### Model Comparison
+
+![Model Comparison](results/training_plots/fig3_model_comparison.png)
 
 **Mamba achieves 1.55× higher Macro F1** than the next best model (SSM) and **1.77× higher** than the Transformer.
+
+### Loss Per Model
+
+![Loss Per Model](results/training_plots/fig7_loss_per_model.png)
+
+Mamba shows the steepest loss reduction from 1.29 to 1.07, indicating effective learning of discriminative features. Transformer loss decreases minimally (1.29 to 1.20), suggesting the architecture struggles with raw ECG waveform modeling.
+
+### Efficiency Analysis (F1 vs. Training Time)
+
+![Efficiency Scatter](results/training_plots/fig8_efficiency_scatter.png)
+
+- **Mamba:** Best accuracy (42.9%) at moderate cost (9.1 hrs)
+- **SSM:** Moderate accuracy (27.6%) at high cost (5.6 hrs)
+- **Transformer:** Low accuracy (24.2%) at very low cost (0.25 hrs)
+- **LSTM:** Lowest accuracy (18.8%) at low cost (0.30 hrs)
+
+Mamba's training time is dominated by the sequential for-loop over 4,500 time steps, which cannot be parallelized on GPU. However, this is a training-time limitation, not an inference-time one — during inference on edge devices, the recurrent state can be maintained incrementally with O(1) per-step computation.
 
 ### Training Dynamics Summary
 
