@@ -1,0 +1,72 @@
+# Data files (too large for git)
+data/raw/*.mat
+data/raw/*.hea
+data/training2017.zip
+data/dataset/
+
+# Model checkpoints (large binary files)
+models/*.pth
+models/*.pt
+models/*.bin
+models/*.onnx
+models/*.zip
+models/checkpoints/*.pth
+models/checkpoints/*.pt
+models/checkpoints/*.bin
+models/models_export/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+.env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
+
+# Results (keep plots, remove raw data)
+results/**/*.zip
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# Latex build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.synctex.gz

@@ -1,0 +1,75 @@
+{
+  "models": [
+    {
+      "name": "Mamba",
+      "total_params": 40964,
+      "file_size_bytes": 177130,
+      "float32_size_kb": 160.0,
+      "layer_counts": {
+        "Linear": 12,
+        "Conv1d": 2,
+        "LayerNorm": 4
+      }
+    },
+    {
+      "name": "Transformer",
+      "total_params": 562692,
+      "file_size_bytes": 7383630,
+      "float32_size_kb": 2198.0,
+      "layer_counts": {
+        "Linear": 8,
+        "TransformerEncoder": 1,
+        "LayerNorm": 4
+      }
+    },
+    {
+      "name": "LSTM",
+      "total_params": 50692,
+      "file_size_bytes": 205928,
+      "float32_size_kb": 198.0,
+      "layer_counts": {
+        "LSTM": 1,
+        "Linear": 1
+      }
+    },
+    {
+      "name": "SSM",
+      "total_params": 7044,
+      "file_size_bytes": 35197,
+      "float32_size_kb": 27.5,
+      "layer_counts": {
+        "Linear": 2,
+        "LayerNorm": 2
+      }
+    }
+  ],
+  "mcu_compatibility": {
+    "Cortex-M0 (16KB RAM)": 16,
+    "Cortex-M4 (256KB RAM)": 256,
+    "Cortex-M7 (512KB RAM)": 512,
+    "ESP32 (520KB RAM)": 520,
+    "Cortex-A7 (1GB RAM)": 1048576
+  },
+  "complexity": {
+    "Mamba": {
+      "per_step": "O(d\u00d7N)",
+      "total": "O(N)",
+      "state": "O(d\u00d7N)"
+    },
+    "Transformer": {
+      "per_step": "O(N)",
+      "total": "O(N\u00b2)",
+      "state": "O(N\u00b2)"
+    },
+    "LSTM": {
+      "per_step": "O(d\u00b2)",
+      "total": "O(N)",
+      "state": "O(d)"
+    },
+    "SSM": {
+      "per_step": "O(d\u00d7N)",
+      "total": "O(N)",
+      "state": "O(d\u00d7N)"
+    }
+  }
+}

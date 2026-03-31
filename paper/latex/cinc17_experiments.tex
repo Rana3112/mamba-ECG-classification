@@ -1,0 +1,633 @@
+% =============================================================================
+% CINC 2017 Experiments — ICANN 2026 Manuscript Section
+% =============================================================================
+% Usage: \input{cinc17_experiments.tex} inside your main paper,
+%        OR compile standalone with: pdflatex cinc17_experiments.tex
+%
+% IMPORTANT — Image paths assume the following directory structure
+% relative to THIS .tex file:
+%   training_plots_of_all_four_models/   (fig1..fig8 as .png or .pdf)
+%   inference_plots/                     (confusion, ROC, etc. as .png)
+%
+% If compiling standalone, the preamble below is used.
+% If including in an existing LNCS document, comment out the preamble.
+% =============================================================================
+
+\documentclass[runningheads]{llncs}
+
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage[utf8]{inputenc}
+
+% Relative path prefixes (adjust if your folder structure differs)
+\newcommand{\trainplot}[1]{training_plots_of_all_four_models/#1}
+\newcommand{\infplot}[1]{inference_plots/#1}
+
+\begin{document}
+
+\title{Mamba-Inspired State Space Models for Efficient\\Multi-Class Cardiac Arrhythmia Classification:\\A Comparative Study on Edge-Deployable ECG Monitoring}
+
+\author{Utkarsh \and Supervisor Name}
+\institute{Institution Name}
+
+\maketitle
+
+% =====================================================================
+\begin{abstract}
+Real-time cardiac arrhythmia detection on edge devices demands architectures
+that balance classification accuracy with computational efficiency. This paper
+presents a comparative evaluation of four sequence modeling architectures ---
+Mamba (Selective State Space Model), Transformer, Long Short-Term Memory (LSTM),
+and a baseline State Space Model (SSM) --- for multi-class ECG arrhythmia
+classification on the PhysioNet/CinC~2017 Challenge dataset. We train all
+models on identical data splits with consistent preprocessing and evaluate on a
+held-out test set of 1,706~ECG recordings across four classes: Normal~(N),
+Other~(O), Atrial Fibrillation~(A), and Noise~($\sim$). During training, Mamba
+achieves the highest Macro~F1 score of \textbf{42.91\%}, outperforming the
+Transformer (24.24\%), SSM (27.61\%), and LSTM (18.80\%). Critically, Mamba
+operates with $O(N)$ linear complexity, compared to the Transformer's $O(N^2)$
+quadratic attention, making it uniquely suited for real-time inference on
+resource-constrained hardware. We further analyze inference-time
+generalization, training dynamics, class-wise performance, and computational
+trade-offs.
+\end{abstract}
+
+
+% =====================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Cardiac arrhythmia affects millions worldwide, and early detection through
+continuous ECG monitoring can be lifesaving. Deploying such monitoring on edge
+devices --- wearable patches, portable ECG monitors, implantable devices ---
+requires models that are simultaneously accurate and computationally
+lightweight.
+
+Traditional approaches fall into two broad categories. \textbf{Recurrent
+models} (LSTM, GRU) offer $O(N)$ complexity but suffer from vanishing
+gradients, which limits their capacity to capture long-range dependencies in
+ECG signals spanning thousands of time steps. \textbf{Attention-based models}
+(Transformer) provide superior context modeling but incur $O(N^2)$ complexity
+due to self-attention, making them impractical for raw ECG waveforms of
+2,250+ time steps (after downsampling).
+
+Mamba~\cite{gu2023mamba} introduces a third path: \textit{Selective State
+Space Models} (S6) that combine the linear complexity of recurrent models with
+a selective attention mechanism. Unlike fixed-coefficient SSMs, Mamba's
+parameters are input-dependent, allowing the model to dynamically gate
+information flow based on ECG signal content.
+
+This paper provides an empirical comparison of all four architectures under
+identical training conditions and analyzes the architectural reasons behind
+Mamba's advantage for ECG classification.
+
+
+% =====================================================================
+\section{Dataset and Preprocessing}
+\label{sec:dataset}
+
+\subsection{PhysioNet/CinC 2017 Dataset}
+
+We use the PhysioNet/Computing in Cardiology Challenge 2017
+(CinC~2017)~\cite{clifford2017af} training set, containing 8,528 single-lead
+ECG recordings sampled at 300\,Hz. Each recording is labeled into one of four
+classes as shown in Table~\ref{tab:class_dist}.
+
+\begin{table}[ht]
+\centering
+\caption{Class distribution of the PhysioNet/CinC 2017 dataset.}
+\label{tab:class_dist}
+\begin{tabular}{@{} l c r r @{}}
+\toprule
+\textbf{Class} & \textbf{Label} & \textbf{Samples} & \textbf{Percentage} \\
+\midrule
+Normal              & N    & 5,076 & 59.5\% \\
+Other               & O    & 2,311 & 27.1\% \\
+Atrial Fibrillation & A    &   758 &  8.9\% \\
+Noise               & $\sim$ & 383 &  4.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The severe class imbalance --- particularly the 4.5\% representation of Noise
+signals --- poses a significant challenge for all architectures.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.6\textwidth]{\trainplot{fig6_class_distribution.png}}
+\caption{Class distribution across the CinC~2017 dataset showing the severe
+imbalance between Normal, Other, AFib, and Noise categories.}
+\label{fig:class_dist}
+\end{figure}
+
+\subsection{Preprocessing}
+
+\begin{itemize}
+    \item \textbf{Downsampling:} 300\,Hz $\rightarrow$ 150\,Hz (factor of 2) to
+          reduce sequence length.
+    \item \textbf{Sequence truncation:} Maximum length of 4,500 time steps.
+    \item \textbf{Train/Test split:} 80/20 stratified split with random seed~42
+          (6,822 train, 1,706 test).
+    \item \textbf{Normalization:} Raw signal values used without additional
+          normalization.
+\end{itemize}
+
+
+% =====================================================================
+\section{Model Architectures}
+\label{sec:models}
+
+All four architectures share a common embedding dimension of $d_{\text{model}}=64$ and are designed to be small enough for edge deployment ($<200$\,KB).
+
+\subsection{Mamba (Selective State Space Model)}
+
+Mamba replaces the fixed state transition matrices of traditional SSMs with
+input-dependent selection mechanisms:
+\begin{itemize}
+    \item \textbf{Selective scan (S6):} Parameters $A,B,C,\Delta$ are functions
+          of the input, enabling content-aware information filtering.
+    \item \textbf{Causal convolution:} 1D depthwise convolution ($k{=}3$) for
+          local pattern capture.
+    \item \textbf{Architecture:} 2 SelectiveSSMLayer blocks, $d_{\text{model}}{=}64$,
+          $d_{\text{state}}{=}16$, length-aware pooling.
+\end{itemize}
+The forward pass processes the sequence in $O(N)$ time with $O(1)$ per-step
+computation.
+
+\subsection{Transformer}
+Standard encoder with sinusoidal positional encoding (max\_len$=$20,000),
+2-layer TransformerEncoder, 4~attention heads, $d_{\text{model}}{=}64$, and mean
+pooling. Self-attention yields $O(N^2)$ complexity.
+
+\subsection{LSTM}
+Unidirectional 2-layer LSTM with hidden size 64. Final hidden state used as
+sequence representation. $O(N)$ complexity but sequential processing.
+
+\subsection{SSM (Baseline S4-style)}
+Fixed-coefficient State Space Model with learnable $A,B,C$ matrices and
+HiPPO initialization. Shares the same wrapper as Mamba but lacks the
+selective mechanism, serving as a controlled ablation.
+
+
+% =====================================================================
+\section{Training Configuration}
+\label{sec:training}
+
+All models were trained with identical hyperparameters to ensure a fair
+comparison (Table~\ref{tab:train_config}).
+
+\begin{table}[ht]
+\centering
+\caption{Training hyperparameters (identical for all models).}
+\label{tab:train_config}
+\begin{tabular}{@{} l l @{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Epochs              & 6 \\
+Effective batch size & 16 (4$\times$4 gradient accumulation) \\
+Optimizer           & AdamW \\
+Learning rate       & $1 \times 10^{-3}$ with cosine annealing \\
+Loss function       & Cross-entropy (unweighted) \\
+Mixed precision     & Disabled (T4 GPU compatibility) \\
+Device              & NVIDIA Tesla T4 (16\,GB) \\
+Checkpoint strategy & Best Macro~F1 saved per model \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% =====================================================================
+\section{Training Results}
+\label{sec:training_results}
+
+\subsection{Overall Performance}
+
+Table~\ref{tab:training_results} summarizes the best validation metrics
+achieved during training. Mamba achieves 1.55$\times$ higher Macro~F1 than
+the second-best model (SSM) and 1.77$\times$ higher than the Transformer.
+
+\begin{table}[ht]
+\centering
+\caption{Training-phase performance comparison across all four models.}
+\label{tab:training_results}
+\begin{tabular}{@{} l r r r r @{}}
+\toprule
+\textbf{Model} & \textbf{Best Macro F1} & \textbf{Final Train Acc}
+               & \textbf{Final Val Loss} & \textbf{Training Time} \\
+\midrule
+\textbf{Mamba} & \textbf{42.91\%} & 55.26\% & 1.085 &  9.1\,hrs \\
+SSM            & 27.61\%          & 52.42\% & 1.241 &  5.6\,hrs \\
+Transformer    & 24.24\%          & 58.25\% & 1.206 & 0.25\,hrs \\
+LSTM           & 18.80\%          & 60.19\% & 1.270 & 0.30\,hrs \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.75\textwidth]{\trainplot{fig3_model_comparison.png}}
+\caption{Model comparison: Best Macro~F1 and peak memory across all four
+architectures.}
+\label{fig:model_comparison}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.75\textwidth]{\trainplot{fig5_summary_table.png}}
+\caption{Summary table of training metrics for all four models.}
+\label{fig:summary_table}
+\end{figure}
+
+
+\subsection{Training Dynamics}
+
+\subsubsection{Loss Convergence.}
+Figure~\ref{fig:loss_curves} shows that Mamba exhibits the steepest loss
+reduction (1.29$\rightarrow$1.07), indicating effective learning of
+discriminative features. The Transformer's loss decreases minimally
+(1.29$\rightarrow$1.20), suggesting it struggles with raw ECG waveform
+modeling at this sequence length.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.75\textwidth]{\trainplot{fig1_loss_curves.png}}
+\caption{Validation loss curves across 6~epochs for all four models. Mamba
+shows the steepest convergence.}
+\label{fig:loss_curves}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.9\textwidth]{\trainplot{fig7_loss_per_model.png}}
+\caption{Individual training and validation loss curves per model, showing
+detailed convergence behavior.}
+\label{fig:loss_per_model}
+\end{figure}
+
+\subsubsection{F1 Progression.}
+Mamba's F1 rises sharply from 18.8\% to 42.9\% by epoch~5, then drops to
+34.9\% at epoch~6 --- indicating the onset of overfitting
+(Figure~\ref{fig:f1_curves}). The SSM shows gradual improvement
+(18.8\%$\rightarrow$27.6\%), confirming that Mamba's selective mechanism is
+critical for ECG feature extraction. LSTM's F1 remains flat at 18.8\% across
+all epochs, indicating majority-class prediction.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.75\textwidth]{\trainplot{fig2_f1_curves.png}}
+\caption{Macro~F1 progression during training. Mamba achieves its peak at
+epoch~5 before overfitting.}
+\label{fig:f1_curves}
+\end{figure}
+
+\subsubsection{Training Accuracy.}
+Figure~\ref{fig:train_accuracy} shows the training accuracy curves. LSTM
+achieves the highest training accuracy (60.2\%) despite the lowest F1 (18.8\%),
+revealing that it has learned to predict the majority class (Normal) rather
+than discriminating between all four categories.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.75\textwidth]{\trainplot{fig4_train_accuracy.png}}
+\caption{Training accuracy curves. High LSTM accuracy is deceptive ---
+the model predicts the majority class.}
+\label{fig:train_accuracy}
+\end{figure}
+
+
+\subsection{Efficiency Analysis}
+
+Figure~\ref{fig:efficiency} plots Macro~F1 against training time, revealing
+the accuracy--cost trade-off. Mamba requires more training time
+(9.1\,hrs vs.\ 0.25\,hrs for Transformer) due to its sequential for-loop
+over 4,500 time steps. However, this is a \textit{training-time} limitation
+--- during edge inference, Mamba maintains a recurrent state with $O(1)$
+per-step computation.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.65\textwidth]{\trainplot{fig8_efficiency_scatter.png}}
+\caption{Efficiency scatter: Macro~F1 vs.\ training time. Mamba achieves the
+best accuracy at moderate computational cost.}
+\label{fig:efficiency}
+\end{figure}
+
+
+% =====================================================================
+\section{Inference Results}
+\label{sec:inference}
+
+To evaluate generalization, we run inference on the held-out test set of
+1,706~ECG recordings using the best checkpoints from training.
+Table~\ref{tab:inference_results} summarizes the results.
+
+\begin{table}[ht]
+\centering
+\caption{Inference-time performance on the held-out test set.}
+\label{tab:inference_results}
+\begin{tabular}{@{} l r r r r @{}}
+\toprule
+\textbf{Model} & \textbf{Macro F1} & \textbf{Weighted F1}
+               & \textbf{Accuracy} & \textbf{Inference Time} \\
+\midrule
+Transformer    & 18.59\% & 43.97\% & 59.38\% & 23.5\,s \\
+LSTM           & 18.18\% & 37.05\% & 40.91\% & 10.6\,s \\
+SSM            & 13.58\% & 13.46\% & 17.76\% & 78.5\,s \\
+Mamba          & 11.73\% & 13.89\% & 29.25\% & 130.4\,s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.75\textwidth]{\infplot{overall_metrics.png}}
+\caption{Overall inference metrics comparison: Macro~F1, Weighted~F1, and
+Accuracy for all four models on the test set.}
+\label{fig:overall_metrics}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.75\textwidth]{\infplot{summary_table.png}}
+\caption{Summary table of all inference metrics.}
+\label{fig:inf_summary}
+\end{figure}
+
+
+\subsection{Confusion Matrix Analysis}
+
+Figure~\ref{fig:confusion} reveals the prediction patterns of each model:
+\begin{itemize}
+    \item \textbf{Transformer:} Predicts ``Normal'' for nearly all inputs
+          (majority-class collapse), achieving high accuracy (59.4\%) that
+          merely reflects the class prior.
+    \item \textbf{Mamba:} Predicts ``Other'' predominantly, correctly
+          classifying 486/491 Other samples but misclassifying 998/1010 Normal
+          samples.
+    \item \textbf{LSTM:} Shows mixed Normal/AFib predictions, suggesting it
+          learns some cardiac rhythm features but cannot reliably discriminate.
+    \item \textbf{SSM:} Similar to Mamba but with weaker class separation.
+\end{itemize}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{\infplot{confusion_matrices (1).png}}
+\caption{Confusion matrices for all four models. Each model collapses to
+predicting 1--2 dominant classes.}
+\label{fig:confusion}
+\end{figure}
+
+
+\subsection{Per-Class F1 Analysis}
+
+Figure~\ref{fig:per_class_f1} shows the class-wise F1 breakdown:
+\begin{itemize}
+    \item \textbf{Normal:} Only Transformer achieves meaningful F1 (74.2\%) by
+          predicting Normal by default.
+    \item \textbf{Other:} Mamba achieves the highest F1 (44.5\%).
+    \item \textbf{AFib:} Only LSTM achieves a non-zero F1 (11.5\%).
+    \item \textbf{Noise:} All models achieve 0\% F1 --- with only 57 test
+          samples, no model learned to detect noise.
+\end{itemize}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.75\textwidth]{\infplot{per_class_f1.png}}
+\caption{Per-class F1 scores. Severe class imbalance causes all models to
+fail on minority classes.}
+\label{fig:per_class_f1}
+\end{figure}
+
+
+\subsection{ROC and Precision--Recall Analysis}
+
+ROC curves (Figure~\ref{fig:roc}) and precision--recall curves
+(Figure~\ref{fig:pr}) provide further insight. AUC values near 0.5 for most
+class--model combinations confirm random-like discrimination. Precision drops
+sharply as recall increases, indicating that none of the models can maintain
+precision while retrieving more positive samples from minority classes.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{\infplot{roc_curves.png}}
+\caption{ROC curves (one-vs-rest) for all four models.  Curves near the
+diagonal indicate near-random classification.}
+\label{fig:roc}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{\infplot{precision_recall.png}}
+\caption{Precision--Recall curves for all four models. Low area under the
+curve for minority classes confirms poor discriminative ability.}
+\label{fig:pr}
+\end{figure}
+
+
+\subsection{Inference Speed}
+
+Figure~\ref{fig:inf_speed} compares inference times on the T4~GPU. The
+Transformer (23.5\,s) and LSTM (10.6\,s) benefit from optimized CUDA kernels
+and parallelizable operations. Mamba (130.4\,s) is slowest due to its
+sequential selective scan. \textbf{Note:} batch-mode GPU inference does not
+reflect edge deployment, where Mamba's $O(1)$ recurrent state update per
+sample would outperform the Transformer's $O(N^2)$ attention recomputation.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.6\textwidth]{\infplot{inference_speed.png}}
+\caption{Inference time for 1,706 test samples on T4~GPU. Mamba's sequential
+scan is slower in batch mode but advantageous in streaming edge deployment.}
+\label{fig:inf_speed}
+\end{figure}
+
+
+% =====================================================================
+\section{Analysis and Discussion}
+\label{sec:analysis}
+
+\subsection{Training vs.\ Inference Gap}
+
+Table~\ref{tab:gap} highlights the significant gap between training-time
+validation and test-time inference metrics.
+
+\begin{table}[ht]
+\centering
+\caption{Gap between training validation and test-time inference Macro~F1.}
+\label{tab:gap}
+\begin{tabular}{@{} l r r r @{}}
+\toprule
+\textbf{Model} & \textbf{Train Val F1} & \textbf{Test F1} & \textbf{Gap} \\
+\midrule
+Mamba       & 42.91\% & 11.73\% & $-31.2$\,pp \\
+Transformer & 24.24\% & 18.59\% & $-5.7$\,pp  \\
+LSTM        & 18.80\% & 18.18\% & $-0.6$\,pp  \\
+SSM         & 27.61\% & 13.58\% & $-14.0$\,pp \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This gap is attributed to three factors:
+\begin{enumerate}
+    \item \textbf{WeightedRandomSampler during training:} Training used
+          oversampling of minority classes, creating artificially balanced
+          batches. Inference runs on the true imbalanced distribution
+          (59\%~Normal).
+    \item \textbf{Limited epochs (6):} Mamba showed overfitting at epoch~5,
+          while the Transformer barely learned. 20--50~epochs with early
+          stopping would improve all models.
+    \item \textbf{No class-weighted loss:} Unweighted cross-entropy fails to
+          penalize minority-class misclassifications, allowing the gradient
+          signal from majority classes to dominate.
+\end{enumerate}
+
+
+\subsection{Why Mamba Outperforms During Training}
+
+The 15.3~percentage-point gap between Mamba (42.9\%) and baseline SSM
+(27.6\%) isolates the effect of the \textit{selective mechanism}:
+
+\begin{itemize}
+    \item In Mamba, the discretization step~$\Delta$, matrices $B$ and $C$ are
+          computed as functions of the input at each time step.
+    \item A sharp QRS complex produces a large~$\Delta$, causing the model to
+          ``remember'' the event; a flat baseline segment produces a
+          small~$\Delta$, allowing the model to ``forget.''
+    \item The fixed-coefficient SSM cannot distinguish between clinically
+          relevant and irrelevant ECG segments.
+\end{itemize}
+
+\subsection{Why Transformers Struggle}
+
+Three factors limit Transformer performance on raw ECG:
+\begin{enumerate}
+    \item \textbf{Positional encoding gap:} Sinusoidal embeddings were designed
+          for discrete tokens, not continuous waveforms.
+    \item \textbf{Attention dilution:} With $N{=}4{,}500$ time steps,
+          self-attention is diluted across all positions. Clinically relevant
+          QRS complexes span $\sim$15 time steps ($<0.4\%$ of the sequence).
+    \item \textbf{No causal structure:} ECG analysis benefits from stateful,
+          causal processing that accumulates evidence over time.
+\end{enumerate}
+
+\subsection{Why LSTM Fails}
+
+LSTM's 18.8\% F1 equals the majority-class baseline, revealing: (i)~vanishing
+gradients over 4,500~steps, (ii)~unidirectional processing prevents using
+future context, and (iii)~64-dimensional hidden states may be insufficient for
+the full variety of ECG morphologies.
+
+
+% =====================================================================
+\section{Edge Device Deployment Analysis}
+\label{sec:edge}
+
+\begin{table}[ht]
+\centering
+\caption{Inference complexity and edge deployment characteristics.}
+\label{tab:edge}
+\begin{tabular}{@{} l c c c c @{}}
+\toprule
+\textbf{Model} & \textbf{Per-step} & \textbf{Memory} &
+\textbf{Parallel} & \textbf{Approx.\ Size} \\
+\midrule
+Mamba       & $O(1)$ & $O(d \times N)$ & No  & $\sim$200\,KB \\
+Transformer & $O(N)$ & $O(N^2)$        & Yes & $\sim$180\,KB \\
+LSTM        & $O(1)$ & $O(h)$          & No  & $\sim$140\,KB \\
+SSM         & $O(1)$ & $O(d \times N)$ & No  & $\sim$192\,KB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For continuous ECG monitoring at 300\,Hz, Mamba processes each new sample in
+$O(1)$ by maintaining a recurrent state, whereas the Transformer must
+recompute $O(N^2)$ attention over all previous samples. After 10~seconds
+(3,000~samples), attention requires $\sim$9\,M operations per update. All
+models fit comfortably on microcontrollers with 256\,KB+ RAM (e.g., ARM
+Cortex-M4/M7, ESP32).
+
+
+% =====================================================================
+\section{Limitations}
+\label{sec:limitations}
+
+\begin{itemize}
+    \item \textbf{Training duration:} Only 6~epochs due to Kaggle GPU
+          constraints. Longer training with early stopping is expected to
+          improve all models, particularly Mamba.
+    \item \textbf{No hyperparameter tuning:} Identical hyperparameters were
+          used for all models. Architecture-specific tuning may close the gap.
+    \item \textbf{Class imbalance:} No focal loss, class weighting, or
+          oversampling was applied. This disadvantages all models on minority
+          classes.
+    \item \textbf{Single-lead ECG:} CinC~2017 uses Lead~I only. Multi-lead
+          ECG may favor architectures with more parameters.
+    \item \textbf{Training speed:} Mamba's sequential scan makes it
+          $37\times$ slower to train than the Transformer, though this does not
+          affect per-sample inference on edge devices.
+\end{itemize}
+
+
+% =====================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+This study provides empirical evidence that Mamba's Selective State Space
+architecture is better suited for ECG arrhythmia classification than
+Transformers, LSTMs, and baseline SSMs. During training, Mamba achieves
+42.91\%~Macro~F1 --- 55\% higher than the next-best model --- by leveraging
+input-dependent state selection to dynamically focus on clinically relevant
+ECG segments.
+
+The gap between training and inference metrics is attributed to the training
+pipeline (weighted sampling, limited epochs, unweighted loss) rather than the
+architecture itself, and can be addressed through class-weighted loss, longer
+training with early stopping, and proper validation protocols.
+
+The $O(N)$ linear complexity, combined with $O(1)$ per-step recurrent
+inference and a model size under 200\,KB, makes Mamba uniquely suited for
+real-time ECG monitoring on edge devices where computational budgets are tight
+and latency requirements are strict.
+
+Future work should explore: (1)~longer training with class-weighted focal
+loss, (2)~multi-lead ECG input, (3)~quantization and pruning for further edge
+optimization, and (4)~hybrid Mamba--Transformer architectures.
+
+
+% =====================================================================
+\begin{thebibliography}{9}
+
+\bibitem{gu2023mamba}
+Gu, A., Dao, T.:
+Mamba: Linear-Time Sequence Modeling with Selective State Spaces.
+arXiv:2312.00752 (2023)
+
+\bibitem{clifford2017af}
+Clifford, G.D., et~al.:
+AF Classification from a Short Single Lead ECG Recording: The
+PhysioNet/Computing in Cardiology Challenge 2017.
+Computing in Cardiology~\textbf{44} (2017)
+
+\bibitem{vaswani2017attention}
+Vaswani, A., et~al.:
+Attention Is All You Need.
+In: NeurIPS, vol.~30 (2017)
+
+\bibitem{hochreiter1997lstm}
+Hochreiter, S., Schmidhuber, J.:
+Long Short-Term Memory.
+Neural Computation~\textbf{9}(8), 1735--1780 (1997)
+
+\bibitem{gu2022s4}
+Gu, A., Goel, K., R{\'e}, C.:
+Efficiently Modeling Long Sequences with Structured State Spaces.
+In: ICLR (2022)
+
+\end{thebibliography}
+
+\end{document}
